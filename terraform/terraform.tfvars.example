@@ -1,0 +1,6 @@
+# cp terraform.tfvars.example terraform.tfvars して編集する
+# flag_secret はファイルに書かず環境変数で: export TF_VAR_flag_secret='...'
+chapter      = "ch01"
+participants = ["alice", "bob"]
+# instance_type = "t3.micro"
+# grader_url    = ""   # 採点 Lambda を立てたら Function URL を設定

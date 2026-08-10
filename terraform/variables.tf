@@ -1,0 +1,43 @@
+variable "region" {
+  description = "AWS リージョン"
+  type        = string
+  default     = "ap-northeast-1"
+}
+
+variable "chapter" {
+  description = "払い出す章 (chapters/ 以下のディレクトリ名)"
+  type        = string
+  default     = "ch01"
+}
+
+variable "participants" {
+  description = "参加者名のリスト。1人につき VM が1台立つ"
+  type        = list(string)
+}
+
+variable "flag_secret" {
+  description = "フラグ生成用シークレット。TF_VAR_flag_secret で渡す。VM には渡らない(人別の計算済みフラグだけが渡る)"
+  type        = string
+  sensitive   = true
+}
+
+variable "questions" {
+  description = "章の問題ID → フラグの hex 長。章を変えるときはここも合わせる"
+  type        = map(number)
+  default = {
+    q1 = 32
+    q2 = 16
+  }
+}
+
+variable "instance_type" {
+  description = "参加者 VM のインスタンスタイプ"
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "grader_url" {
+  description = "採点 Lambda の Function URL(自動お祝い用・未デプロイなら空のまま)"
+  type        = string
+  default     = ""
+}

@@ -1,0 +1,47 @@
+#!/bin/bash
+#
+# フラグ提出コマンド(/usr/local/bin/submit として配置される)
+#
+#   submit 'flag{...}'
+#
+# 採点 Lambda に POST し、正解なら Lambda が Slack に自動でお祝いを投稿する。
+set -u
+
+FLAG=${1:?usage: submit 'flag{...}'}
+PARTICIPANT=$(cat /etc/handson/participant 2>/dev/null || echo unknown)
+GRADER_URL=$(cat /etc/handson/grader_url 2>/dev/null || true)
+
+# 同じフラグの再提出で Slack を汚さないためのローカルマーカー
+marker="/var/tmp/.handson-submitted-$(printf '%s' "$FLAG" | sha256sum | cut -c1-16)"
+if [ -e "$marker" ] && [ "${2:-}" != "--force" ]; then
+    echo "このフラグは提出済みです(再提出は submit '<flag>' --force)"
+    exit 0
+fi
+
+# 採点サーバー未設定ならローカル採点する。
+# /etc/handson/answers/ には正解フラグの sha256 しか置いていないので、
+# 参加者が読んでも答えは分からない(照合だけができる)
+if [ -z "$GRADER_URL" ]; then
+    hash=$(printf '%s' "$FLAG" | sha256sum | cut -d' ' -f1)
+    match=$(grep -lx "$hash" /etc/handson/answers/*.sha256 2>/dev/null | head -1 || true)
+    if [ -n "$match" ]; then
+        echo "正解！($(basename "$match" .sha256))ローカル採点のため、Slack への報告もお忘れなく: $FLAG"
+        touch "$marker"
+    else
+        echo "不正解です。フラグを確認してください。"
+    fi
+    exit 0
+fi
+
+resp=$(curl -sS -m 10 -X POST "$GRADER_URL" \
+    -H 'Content-Type: application/json' \
+    -d "{\"participant\":\"${PARTICIPANT}\",\"flag\":\"${FLAG}\"}") || {
+    echo "採点サーバーに接続できませんでした。時間をおいて再実行してください。"
+    exit 1
+}
+
+result=$(printf '%s' "$resp" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("result",""), d.get("message",""))' 2>/dev/null || printf '%s' "$resp")
+echo "$result"
+case "$result" in
+correct*) touch "$marker" ;;
+esac

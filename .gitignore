@@ -1,0 +1,9 @@
+# PDF (書籍データは含めない)
+*.pdf
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
