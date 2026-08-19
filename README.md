@@ -12,7 +12,7 @@
 terraform apply ──────▶  EC2 × 参加者数 (Ubuntu 24.04)
                            └ cloud-init が chapters/<章>/setup.sh を実行して問題を仕込む
                          Lambda (採点サーバー・任意)
-                           └ 正解すると Slack にお祝いを投稿
+                           └ 正解すると Slack / Google Chat にお祝いを投稿
 
 参加者
 ────────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ SSM Session Manager で VM に接続(SSH 鍵・公開ポートなし)
 |---|---|
 | `terraform/` | VM 払い出し一式 |
 | `chapters/ch01/` | 第1章の問題文(`README.md`)・仕込みスクリプト(`setup.sh`)・自動判定(`check.sh`)・解説(`SOLUTION.md`、実施後公開) |
-| `grader/` | 採点 Lambda(Function URL で公開、Slack Webhook に通知) |
+| `grader/` | 採点 Lambda(VM から Invoke API で直接呼ぶ、Slack / Google Chat の Webhook に通知) |
 | `tools/submit` | VM に配布されるフラグ提出コマンド |
 
 ## 運営手順

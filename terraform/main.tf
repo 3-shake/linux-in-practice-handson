@@ -43,6 +43,23 @@ resource "aws_iam_instance_profile" "handson" {
   role = aws_iam_role.handson.name
 }
 
+# 採点 Lambda は Invoke API で直接呼ぶ(組織ポリシーが Function URL を
+# ブロックするため)。submit がインスタンスロールで SigV4 署名する
+resource "aws_iam_role_policy" "invoke_grader" {
+  count = var.grader_function_arn != "" ? 1 : 0
+  name  = "invoke-grader"
+  role  = aws_iam_role.handson.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "lambda:InvokeFunction"
+      Resource = var.grader_function_arn
+    }]
+  })
+}
+
 # SSM セッションの既定設定(アカウント・リージョン単位)。
 # 素の接続だと sh で cwd が agent のディレクトリになり UX が悪いため、
 # bash に置き換えて /opt/handson に落とす。
@@ -150,13 +167,13 @@ resource "aws_instance" "handson" {
     runcmd = [[
       "bash", "-c",
       format(
-        "PARTICIPANT='%s' %s GRADER_URL='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
+        "PARTICIPANT='%s' %s GRADER_ARN='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
         each.key,
         join(" ", [
           for qid in sort(keys(var.questions)) :
           "FLAG_${upper(qid)}='${data.external.flags[each.key].result[qid]}'"
         ]),
-        var.grader_url,
+        var.grader_function_arn,
         var.chapter,
       )
     ]]

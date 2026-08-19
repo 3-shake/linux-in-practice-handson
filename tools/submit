@@ -4,14 +4,16 @@
 #
 #   submit 'flag{...}'
 #
-# 採点 Lambda に POST し、正解なら Lambda が Slack に自動でお祝いを投稿する。
+# 採点 Lambda を Invoke API で呼び、正解なら Lambda が Slack / Google Chat に
+# 自動でお祝いを投稿する。組織ポリシーで公開 Function URL が使えないため、
+# インスタンスロールのクレデンシャル(IMDSv2)で SigV4 署名して直接叩く。
 set -u
 
 FLAG=${1:?usage: submit 'flag{...}'}
 PARTICIPANT=$(cat /etc/handson/participant 2>/dev/null || echo unknown)
-GRADER_URL=$(cat /etc/handson/grader_url 2>/dev/null || true)
+GRADER_ARN=$(cat /etc/handson/grader_arn 2>/dev/null || true)
 
-# 同じフラグの再提出で Slack を汚さないためのローカルマーカー
+# 同じフラグの再提出で通知先を汚さないためのローカルマーカー
 marker="/var/tmp/.handson-submitted-$(printf '%s' "$FLAG" | sha256sum | cut -c1-16)"
 if [ -e "$marker" ] && [ "${2:-}" != "--force" ]; then
     echo "このフラグは提出済みです(再提出は submit '<flag>' --force)"
@@ -21,7 +23,7 @@ fi
 # 採点サーバー未設定ならローカル採点する。
 # /etc/handson/answers/ には正解フラグの sha256 しか置いていないので、
 # 参加者が読んでも答えは分からない(照合だけができる)
-if [ -z "$GRADER_URL" ]; then
+if [ -z "$GRADER_ARN" ]; then
     hash=$(printf '%s' "$FLAG" | sha256sum | cut -d' ' -f1)
     match=$(grep -lx "$hash" /etc/handson/answers/*.sha256 2>/dev/null | head -1 || true)
     if [ -n "$match" ]; then
@@ -33,9 +35,60 @@ if [ -z "$GRADER_URL" ]; then
     exit 0
 fi
 
-resp=$(curl -sS -m 10 -X POST "$GRADER_URL" \
-    -H 'Content-Type: application/json' \
-    -d "{\"participant\":\"${PARTICIPANT}\",\"flag\":\"${FLAG}\"}") || {
+resp=$(python3 - "$GRADER_ARN" "$PARTICIPANT" "$FLAG" <<'PYEOF'
+import datetime, hashlib, hmac, json, sys, urllib.request
+
+arn, participant, flag = sys.argv[1], sys.argv[2], sys.argv[3]
+region, fname = arn.split(":")[3], arn.split(":")[6]
+
+def imds(path, token=None, method="GET"):
+    req = urllib.request.Request(f"http://169.254.169.254{path}", method=method)
+    if token:
+        req.add_header("X-aws-ec2-metadata-token", token)
+    else:
+        req.add_header("X-aws-ec2-metadata-token-ttl-seconds", "60")
+    return urllib.request.urlopen(req, timeout=2).read().decode()
+
+tok = imds("/latest/api/token", method="PUT")
+role = imds("/latest/meta-data/iam/security-credentials/", tok).strip()
+c = json.loads(imds(f"/latest/meta-data/iam/security-credentials/{role}", tok))
+
+host = f"lambda.{region}.amazonaws.com"
+path = f"/2015-03-31/functions/{fname}/invocations"
+body = json.dumps({"body": json.dumps({"participant": participant, "flag": flag})}).encode()
+now = datetime.datetime.now(datetime.timezone.utc)
+amzdate, datestamp = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+
+headers = {
+    "content-type": "application/json",
+    "host": host,
+    "x-amz-date": amzdate,
+    "x-amz-security-token": c["Token"],
+}
+signed = ";".join(sorted(headers))
+canon = (f"POST\n{path}\n\n"
+         + "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+         + f"\n{signed}\n{hashlib.sha256(body).hexdigest()}")
+scope = f"{datestamp}/{region}/lambda/aws4_request"
+sts = f"AWS4-HMAC-SHA256\n{amzdate}\n{scope}\n{hashlib.sha256(canon.encode()).hexdigest()}"
+
+def hm(key, msg):
+    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+k = hm(hm(hm(hm(("AWS4" + c["SecretAccessKey"]).encode(), datestamp), region), "lambda"), "aws4_request")
+sig = hmac.new(k, sts.encode(), hashlib.sha256).hexdigest()
+
+req = urllib.request.Request(f"https://{host}{path}", data=body, method="POST")
+for name, v in headers.items():
+    if name != "host":
+        req.add_header(name, v)
+req.add_header("Authorization",
+    f"AWS4-HMAC-SHA256 Credential={c['AccessKeyId']}/{scope}, SignedHeaders={signed}, Signature={sig}")
+with urllib.request.urlopen(req, timeout=10) as r:
+    out = json.loads(r.read())
+print(out.get("body", ""))
+PYEOF
+) || {
     echo "採点サーバーに接続できませんでした。時間をおいて再実行してください。"
     exit 1
 }

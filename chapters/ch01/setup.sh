@@ -42,9 +42,9 @@ chmod 700 "$FLAG_DIR"
 # submit コマンドが参照する参加者情報と採点サーバー URL
 echo "$PARTICIPANT" >/etc/handson/participant
 chmod 644 /etc/handson/participant
-if [ -n "${GRADER_URL:-}" ]; then
-    echo "$GRADER_URL" >/etc/handson/grader_url
-    chmod 644 /etc/handson/grader_url
+if [ -n "${GRADER_ARN:-}" ]; then
+    echo "$GRADER_ARN" >/etc/handson/grader_arn
+    chmod 644 /etc/handson/grader_arn
 fi
 install -m 755 "$SCRIPT_DIR/../../tools/submit" /usr/local/bin/submit
 

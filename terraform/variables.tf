@@ -36,8 +36,8 @@ variable "instance_type" {
   default     = "t3.micro"
 }
 
-variable "grader_url" {
-  description = "採点 Lambda の Function URL(自動お祝い用・未デプロイなら空のまま)"
+variable "grader_function_arn" {
+  description = "採点 Lambda の ARN(自動お祝い用・未デプロイなら空のまま)。組織ポリシーで公開 Function URL が使えないため、submit がインスタンスロールの SigV4 署名で Invoke API を直接呼ぶ"
   type        = string
   default     = ""
 }
