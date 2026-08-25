@@ -129,13 +129,14 @@ locals {
     { "tools/submit" = "${path.module}/../tools/submit" },
   )
 
-  # gzip 圧縮で user-data の 16KB 制限に余裕を持たせる。
+  # 各ファイルは平文で cloud-config に埋め込み、user-data 全体を 1 回だけ
+  # gzip する(user_data_base64 参照)。ファイルごとの gzip+base64 は
+  # base64 で 1.33 倍に膨張して 16KB 制限をほぼ使い切るため。
   # file() の制約でテキストファイル前提(バイナリを配りたくなったら S3 へ)
   write_files = [
     for rel, abs in local.payload_files : {
       path        = "/opt/src/${rel}"
-      encoding    = "gz+b64"
-      content     = base64gzip(file(abs))
+      content     = file(abs)
       permissions = "0644"
     }
   ]
@@ -161,8 +162,10 @@ resource "aws_instance" "handson" {
   }
 
   # cloud-init: ファイルを書き込み、人別フラグを渡して章の setup.sh を実行。
-  # 注意: user-data は 16KB 制限。章の payload が肥大したら S3 配布に切り替える
-  user_data = join("\n", ["#cloud-config", yamlencode({
+  # 16KB 制限対策として cloud-config 全体を gzip して渡す(cloud-init は
+  # gzip された user-data を透過的に展開する)。制限は gzip 後のサイズに
+  # 効くので、ch03 時点で 7KB 程度。それでも肥大したら S3 配布に切り替える
+  user_data_base64 = base64gzip(join("\n", ["#cloud-config", yamlencode({
     write_files = local.write_files
     runcmd = [[
       "bash", "-c",
@@ -177,7 +180,7 @@ resource "aws_instance" "handson" {
         var.chapter,
       )
     ]]
-  })])
+  })]))
   user_data_replace_on_change = true
 
   tags = {
