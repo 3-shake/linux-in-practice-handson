@@ -1,5 +1,10 @@
 # PDF (書籍データは含めない)
 *.pdf
+book-text/
+
+# Python
+__pycache__/
+*.pyc
 
 # OS
 .DS_Store

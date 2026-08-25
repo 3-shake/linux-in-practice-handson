@@ -124,7 +124,7 @@ locals {
     {
       for f in fileset(local.chapter_dir, "**") :
       "chapters/${var.chapter}/${f}" => "${local.chapter_dir}/${f}"
-      if f != "SOLUTION.md"
+      if f != "SOLUTION.md" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
     },
     { "tools/submit" = "${path.module}/../tools/submit" },
   )
