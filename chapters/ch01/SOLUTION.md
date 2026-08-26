@@ -107,7 +107,7 @@ $ sudo ldconfig /opt/handson/ch01/lib
 
 ```
 printf '%s' "<participant>:ch01-q1" | openssl dgst -sha256 -hmac "$FLAG_SECRET" -r | cut -c1-32   # q1
-printf '%s' "<participant>:ch01-q2" | openssl dgst -sha256 -hmac "$FLAG_SECRET" -r | cut -c1-16   # q2
+printf '%s' "<participant>:ch01-q2" | openssl dgst -sha256 -hmac "$FLAG_SECRET" -r | cut -c1-32   # q2
 ```
 
 ## 運営メモ: ソースの公開タイミング

@@ -21,15 +21,6 @@ variable "flag_secret" {
   sensitive   = true
 }
 
-variable "questions" {
-  description = "章の問題ID → フラグの hex 長。章を変えるときはここも合わせる"
-  type        = map(number)
-  default = {
-    q1 = 32
-    q2 = 16
-  }
-}
-
 variable "instance_type" {
   description = "参加者 VM のインスタンスタイプ"
   type        = string

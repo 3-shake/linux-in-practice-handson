@@ -28,7 +28,7 @@ gen_flag() {
 if [ -z "${FLAG_Q1:-}" ] || [ -z "${FLAG_Q2:-}" ]; then
     FLAG_SECRET=${FLAG_SECRET:?FLAG_Q1/FLAG_Q2 or FLAG_SECRET required}
     FLAG_Q1=$(gen_flag q1 32)
-    FLAG_Q2=$(gen_flag q2 16)
+    FLAG_Q2=$(gen_flag q2 32)
 fi
 
 export DEBIAN_FRONTEND=noninteractive

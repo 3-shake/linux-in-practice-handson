@@ -111,11 +111,15 @@ data "external" "flags" {
     participant = each.key
     chapter     = var.chapter
     secret      = var.flag_secret
-    questions   = jsonencode(var.questions)
+    questions   = jsonencode(local.questions)
   }
 }
 
 locals {
+  # 全章共通の問題ID。フラグは一律 hex 32 文字(flags.py・各章 setup.sh・
+  # grader/lambda_function.py の HEX_LEN と揃っている)
+  questions = ["q1", "q2"]
+
   chapter_dir = "${path.module}/../chapters/${var.chapter}"
 
   # 章のファイル + submit コマンドを /opt/src 以下に同じ構造で配置する。
@@ -173,7 +177,7 @@ resource "aws_instance" "handson" {
         "PARTICIPANT='%s' %s GRADER_ARN='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
         each.key,
         join(" ", [
-          for qid in sort(keys(var.questions)) :
+          for qid in local.questions :
           "FLAG_${upper(qid)}='${data.external.flags[each.key].result[qid]}'"
         ]),
         var.grader_function_arn,

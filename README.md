@@ -30,7 +30,7 @@ SSM Session Manager で VM に接続(SSH 鍵・公開ポートなし)
 | パス | 内容 |
 |---|---|
 | `terraform/` | VM 払い出し一式 |
-| `chapters/ch01/` | 第1章の問題文(`README.md`)・仕込みスクリプト(`setup.sh`)・自動判定(`check.sh`)・解説(`SOLUTION.md`、実施後公開) |
+| `chapters/chNN/` | 各章(ch01〜ch12)の問題文(`README.md`)・仕込みスクリプト(`setup.sh`)・自動判定(`check.sh`)・解説(`SOLUTION.md`、実施後公開) |
 | `grader/` | 採点 Lambda(VM から Invoke API で直接呼ぶ、Slack / Google Chat の Webhook に通知) |
 | `tools/submit` | VM に配布されるフラグ提出コマンド |
 
@@ -93,8 +93,24 @@ IAM ロール等も消えるが、翌週 apply すれば同名で再作成され
 1. 新しい章なら `chapters/chNN/` に `README.md`(問題文)・`setup.sh`(仕込み)・
    必要なら `check.sh`(自動判定)を作り、`grader/lambda_function.py` の
    `QUESTIONS` に問題を追加する
-2. `terraform.tfvars` の `chapter` と `questions`(問題ID → フラグ hex 長)を
-   更新する(例: `questions = { q1 = 32, q2 = 16 }`)
+2. `terraform.tfvars` の `chapter` を更新する
+
+ch01〜ch12 は作成済み。
+
+| 章 | 問題1(CTF) | 問題2(修復) |
+|---|---|---|
+| ch01 Linuxの概要 | 捨てられたフラグ | 起動しない greeter |
+| ch02 プロセス管理(基礎編) | 眠り続けるデーモン | 倒せないプロセス |
+| ch03 プロセススケジューラ | 気難しい預言者 | CPU を譲らない同居人 |
+| ch04 メモリ管理システム | 生きているプロセスのメモリ | OOM で死につづけるサービス |
+| ch05 プロセス管理(応用編) | 無口な郵便屋 | 消える予約 |
+| ch06 デバイスアクセス | 開かずの金庫 | 7年前に巻き戻った業務データ |
+| ch07 ファイルシステム | 消えたファイルのフラグ | いっぱいなのに空いている cache |
+| ch08 記憶階層 | 幻を映すファイル | 書き込みが遅すぎる |
+| ch09 ブロック層 | ディスクに書かれなかったフラグ | 親切すぎるチューナー |
+| ch10 仮想化機能 | 消された仮想ディスク | 起動しない仮想マシン |
+| ch11 コンテナ | 別世界の金庫 | 1回しか動かないコンテナ |
+| ch12 cgroup | 秘密は絞られたときだけ | 何度でも殺されるワーカー |
 
 ## 参加者向けルール
 

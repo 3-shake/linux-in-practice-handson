@@ -11,18 +11,21 @@ import hmac
 import json
 import sys
 
+# フラグの hex 長は全問題で共通(各章の setup.sh・grader の HEX_LEN と揃える)
+HEX_LEN = 32
+
 
 def main():
     query = json.load(sys.stdin)
-    questions = json.loads(query["questions"])
+    qids = json.loads(query["questions"])
     out = {}
-    for qid, length in questions.items():
+    for qid in qids:
         digest = hmac.new(
             query["secret"].encode(),
             f'{query["participant"]}:{query["chapter"]}-{qid}'.encode(),
             hashlib.sha256,
         ).hexdigest()
-        out[qid] = f"flag{{{digest[: int(length)]}}}"
+        out[qid] = f"flag{{{digest[:HEX_LEN]}}}"
     json.dump(out, sys.stdout)
 
 
