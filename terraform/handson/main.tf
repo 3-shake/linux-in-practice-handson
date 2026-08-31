@@ -130,12 +130,13 @@ locals {
   chapter_dir = "${path.module}/../../chapters/${var.chapter}"
 
   # 章のファイル + submit コマンドを /opt/src 以下に同じ構造で配置する。
-  # SOLUTION.md(運営用の解答)は participant の VM に配布してはいけない
+  # SOLUTION.md(運営用の解答)と e2e.sh(想定解を含む E2E テスト)は
+  # participant の VM に配布してはいけない
   payload_files = merge(
     {
       for f in fileset(local.chapter_dir, "**") :
       "chapters/${var.chapter}/${f}" => "${local.chapter_dir}/${f}"
-      if f != "SOLUTION.md" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
+      if f != "SOLUTION.md" && f != "e2e.sh" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
     },
     { "tools/submit" = "${path.module}/../../tools/submit" },
   )

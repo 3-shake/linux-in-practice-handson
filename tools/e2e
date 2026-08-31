@@ -1,0 +1,95 @@
+#!/bin/bash
+#
+# 章の E2E テストを実 VM 上で実行する(SSM RunShellScript 経由)
+#
+#   tools/e2e <chapter> [instance-id]
+#
+# instance-id を省略すると tag:Name=handson-<chapter>-* の running インスタンス
+# を検索し、1台だけならそれを使う。章ファイル一式 + tools/ を tar+gzip+base64
+# で VM に送り込み、chapters/<chapter>/e2e.sh を root で実行して結果を表示する。
+# e2e.sh が exit 0 (E2E: ALL PASS) 以外なら、このスクリプトも exit 1 で終わる。
+#
+# 制約:
+#   - ペイロードは send-command のサイズ制限(約100KB)以内に収めること
+#   - 出力は get-command-invocation の上限(約24000文字)で切り詰められる
+set -euo pipefail
+
+CHAPTER=${1:?usage: tools/e2e <chapter> [instance-id]}
+INSTANCE=${2:-}
+export AWS_PROFILE=${AWS_PROFILE:-handson-tf}
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+
+E2E_SH="$REPO/chapters/$CHAPTER/e2e.sh"
+if [ ! -f "$E2E_SH" ]; then
+    echo "chapters/$CHAPTER/e2e.sh がありません" >&2
+    exit 1
+fi
+
+# 対象インスタンスの解決
+if [ -z "$INSTANCE" ]; then
+    ids=$(aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=handson-${CHAPTER}-*" \
+        "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]|[0].Value]' \
+        --output text)
+    n=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
+    if [ "$n" -eq 0 ]; then
+        echo "running の handson-${CHAPTER}-* が見つかりません。instance-id を指定してください" >&2
+        exit 1
+    fi
+    if [ "$n" -gt 1 ]; then
+        echo "複数見つかりました。instance-id を指定してください:" >&2
+        printf '%s\n' "$ids" >&2
+        exit 1
+    fi
+    INSTANCE=$(printf '%s\n' "$ids" | awk '{print $1}')
+    echo "target: $INSTANCE ($(printf '%s\n' "$ids" | awk '{print $2}'))"
+fi
+
+# ペイロード: 章ディレクトリ + tools/(e2e-lib.sh など)を丸ごと送る
+B64=$(tar -czf - -C "$REPO" "chapters/$CHAPTER" tools | base64 | tr -d '\n')
+if [ "${#B64}" -gt 90000 ]; then
+    echo "ペイロードが大きすぎます(${#B64} bytes)。send-command の制限に収まりません" >&2
+    exit 1
+fi
+
+REMOTE=$(mktemp)
+trap 'rm -f "$REMOTE"' EXIT
+cat >"$REMOTE" <<EOF
+#!/bin/bash
+set -u
+rm -rf /opt/e2e/src
+mkdir -p /opt/e2e/src
+echo "$B64" | base64 -d | tar -xz -C /opt/e2e/src
+export E2E_SRC=/opt/e2e/src
+exec bash "\$E2E_SRC/chapters/$CHAPTER/e2e.sh"
+EOF
+
+PARAMS=$(python3 -c 'import json,sys; print(json.dumps(
+    {"commands": [open(sys.argv[1]).read()], "executionTimeout": ["600"]}))' "$REMOTE")
+
+CMD_ID=$(aws ssm send-command \
+    --instance-ids "$INSTANCE" \
+    --document-name "AWS-RunShellScript" \
+    --comment "e2e $CHAPTER" \
+    --parameters "$PARAMS" \
+    --query 'Command.CommandId' --output text)
+echo "command-id: $CMD_ID"
+
+STATUS=Pending
+for _ in $(seq 1 120); do
+    STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+        --query Status --output text 2>/dev/null || echo Pending)
+    case "$STATUS" in Pending | InProgress | Delayed) sleep 3 ;; *) break ;; esac
+done
+
+aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
+    --query '{Out:StandardOutputContent,Err:StandardErrorContent}' --output json |
+    python3 -c 'import json,sys
+d = json.load(sys.stdin)
+print(d["Out"])
+if d["Err"]:
+    print("STDERR:\n" + d["Err"])'
+
+echo "status: $STATUS"
+[ "$STATUS" = "Success" ]

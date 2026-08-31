@@ -29,7 +29,8 @@ SSM Session Manager で VM に接続(SSH 鍵・公開ポートなし)
 
 | パス | 内容 |
 |---|---|
-| `terraform/` | VM 払い出し一式 |
+| `terraform/handson/` | VM 払い出し一式(開催ごとに apply、指定時刻に自動 destroy) |
+| `terraform/ops/` | 自動 destroy の常設インフラ(state バケット・CodeBuild。初回セットアップ手順も `terraform/ops/README.md`) |
 | `chapters/chNN/` | 各章(ch01〜ch12)の問題文(`README.md`)・仕込みスクリプト(`setup.sh`)・自動判定(`check.sh`)・解説(`SOLUTION.md`、実施後公開) |
 | `grader/` | 採点 Lambda(VM から Invoke API で直接呼ぶ、Slack / Google Chat の Webhook に通知) |
 | `tools/submit` | VM に配布されるフラグ提出コマンド |
@@ -39,13 +40,15 @@ SSM Session Manager で VM に接続(SSH 鍵・公開ポートなし)
 ### 払い出し(輪読会の前に)
 
 ```console
-$ cd terraform
+$ cd terraform/handson
 $ cp terraform.tfvars.example terraform.tfvars   # 参加者リストと章を編集
 $ export AWS_PROFILE=handson-tf                  # credential_process 経由(下記)
-$ export TF_VAR_flag_secret='ランダムな文字列'     # 期間中は同じ値を使い続ける
-$ terraform init
+$ terraform init -backend-config=backend.hcl
 $ terraform apply
 ```
+
+初回だけ、フラグ用シークレットの登録と backend.hcl の作成が必要
+(`terraform/ops/README.md` 参照)。
 
 > `aws login` 方式の認証を Terraform は直接読めないため、`~/.aws/config` に
 > このプロファイルを用意してある(トークンは実行のたびに自動リフレッシュされる):
@@ -80,10 +83,26 @@ $ terraform output connect_commands
 $ terraform output flags
 ```
 
-### 片付け(輪読会の後)
+### 章の E2E テスト(任意)
+
+払い出し済みの VM 1台に対して、章の判定(chNN-check)の合否ケースを一通り流す。
+リポジトリの最新 check.sh を VM に配置してから、`chapters/chNN/e2e.sh` の
+シナリオ(不合格系 → 合格系 → 後始末)を SSM 経由で実行する:
 
 ```console
-$ terraform destroy
+$ tools/e2e ch03            # tag:Name から VM を自動検出(running が1台のとき)
+$ tools/e2e ch03 i-xxxx     # インスタンス指定
+```
+
+e2e.sh は想定解を含むため、SOLUTION.md と同様に参加者 VM へは配布されない。
+
+### 片付け(輪読会の後)
+
+`destroy_at`(既定: 当日19時 JST)に自動で destroy される。前倒しで消したい
+ときは:
+
+```console
+$ aws codebuild start-build --project-name linux-handson-destroy   # または terraform destroy
 ```
 
 IAM ロール等も消えるが、翌週 apply すれば同名で再作成される。
@@ -120,7 +139,7 @@ ch01〜ch12 は作成済み。
 
 ## 設計メモ
 
-- **フラグは Terraform 側で事前計算**(`terraform/scripts/flags.py`、要 python3)して
+- **フラグは Terraform 側で事前計算**(`terraform/handson/scripts/flags.py`、要 python3)して
   VM に渡す。`FLAG_SECRET` を VM に渡さないのは、user-data が IMDS 経由で参加者
   本人に読めるため。漏れて困るのは本人のフラグだけ
   (自分の答えのカンニングは性善説で運用)
