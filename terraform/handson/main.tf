@@ -103,6 +103,13 @@ resource "aws_security_group" "handson" {
 # ---------------------------------------------------------------
 # 人別フラグの事前計算と、章のファイル一式の cloud-init への埋め込み
 # ---------------------------------------------------------------
+
+# フラグ生成用シークレット(登録手順は ../ops/README.md)。変数で渡さないのは、
+# 自動 destroy(CodeBuild)にシークレットを配る経路を作らないため
+data "aws_ssm_parameter" "flag_secret" {
+  name = "/linux-handson/flag-secret"
+}
+
 data "external" "flags" {
   for_each = toset(var.participants)
   program  = ["python3", "${path.module}/scripts/flags.py"]
@@ -110,7 +117,7 @@ data "external" "flags" {
   query = {
     participant = each.key
     chapter     = var.chapter
-    secret      = var.flag_secret
+    secret      = data.aws_ssm_parameter.flag_secret.value
     questions   = jsonencode(local.questions)
   }
 }
@@ -120,7 +127,7 @@ locals {
   # grader/lambda_function.py の HEX_LEN と揃っている)
   questions = ["q1", "q2"]
 
-  chapter_dir = "${path.module}/../chapters/${var.chapter}"
+  chapter_dir = "${path.module}/../../chapters/${var.chapter}"
 
   # 章のファイル + submit コマンドを /opt/src 以下に同じ構造で配置する。
   # SOLUTION.md(運営用の解答)は participant の VM に配布してはいけない
@@ -130,7 +137,7 @@ locals {
       "chapters/${var.chapter}/${f}" => "${local.chapter_dir}/${f}"
       if f != "SOLUTION.md" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
     },
-    { "tools/submit" = "${path.module}/../tools/submit" },
+    { "tools/submit" = "${path.module}/../../tools/submit" },
   )
 
   # 各ファイルは平文で cloud-config に埋め込み、user-data 全体を 1 回だけ
@@ -156,6 +163,9 @@ resource "aws_instance" "handson" {
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.handson.name
 
+  # 自爆タイマー(runcmd)の poweroff で stop ではなく terminate させる
+  instance_initiated_shutdown_behavior = "terminate"
+
   metadata_options {
     http_tokens = "required"
   }
@@ -171,19 +181,23 @@ resource "aws_instance" "handson" {
   # 効くので、ch03 時点で 7KB 程度。それでも肥大したら S3 配布に切り替える
   user_data_base64 = base64gzip(join("\n", ["#cloud-config", yamlencode({
     write_files = local.write_files
-    runcmd = [[
-      "bash", "-c",
-      format(
-        "PARTICIPANT='%s' %s GRADER_ARN='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
-        each.key,
-        join(" ", [
-          for qid in local.questions :
-          "FLAG_${upper(qid)}='${data.external.flags[each.key].result[qid]}'"
-        ]),
-        var.grader_function_arn,
-        var.chapter,
-      )
-    ]]
+    runcmd = [
+      [
+        "bash", "-c",
+        format(
+          "PARTICIPANT='%s' %s GRADER_ARN='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
+          each.key,
+          join(" ", [
+            for qid in local.questions :
+            "FLAG_${upper(qid)}='${data.external.flags[each.key].result[qid]}'"
+          ]),
+          var.grader_function_arn,
+          var.chapter,
+        )
+      ],
+      # 自動 destroy が失敗したときの保険: 予定時刻の 30 分後に self-terminate
+      ["systemd-run", "--on-calendar=${local.self_destruct_at}", "systemctl", "poweroff"],
+    ]
   })]))
   user_data_replace_on_change = true
 

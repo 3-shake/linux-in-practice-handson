@@ -15,10 +15,18 @@ variable "participants" {
   type        = list(string)
 }
 
-variable "flag_secret" {
-  description = "フラグ生成用シークレット。TF_VAR_flag_secret で渡す。VM には渡らない(人別の計算済みフラグだけが渡る)"
+variable "destroy_at" {
+  description = "自動 destroy の時刻(JST)。hh:mm なら apply 当日のその時刻、YYYY-MM-DDThh:mm:ss なら指定日時。この時刻に EventBridge Scheduler が CodeBuild(terraform/ops 参照)を起動して terraform destroy する"
   type        = string
-  sensitive   = true
+  default     = "19:00"
+
+  validation {
+    condition = (
+      can(regex("^\\d{2}:\\d{2}$", var.destroy_at)) ||
+      can(regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$", var.destroy_at))
+    )
+    error_message = "destroy_at は hh:mm(apply 当日) か YYYY-MM-DDThh:mm:ss(JST)で指定する。"
+  }
 }
 
 variable "instance_type" {

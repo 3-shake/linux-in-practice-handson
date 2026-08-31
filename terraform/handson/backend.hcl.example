@@ -1,0 +1,4 @@
+bucket       = "linux-handson-tfstate-<AWS_ACCOUNT_ID>"
+key          = "handson/terraform.tfstate"
+region       = "ap-northeast-1"
+use_lockfile = true
