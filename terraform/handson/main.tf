@@ -78,9 +78,10 @@ resource "aws_ssm_document" "session_prefs" {
     inputs = {
       idleSessionTimeout = "60"
       # この設定はアカウント・リージョン内の全セッションに効くため、
-      # 案内表示はハンズオン VM(/opt/handson がある)に限定する
+      # 案内表示はハンズオン VM に限定する(bash -l が読む /etc/profile.d/
+      # handson.sh が章の状態を表示する。配置は tools/vm/bootstrap.sh)
       shellProfile = {
-        linux = "cd /opt/handson 2>/dev/null && echo '問題文: cat /opt/handson/ch*/README.md'; exec /bin/bash -l"
+        linux = "cd /opt/handson 2>/dev/null; exec /bin/bash -l"
       }
     }
   })
@@ -101,7 +102,7 @@ resource "aws_security_group" "handson" {
 }
 
 # ---------------------------------------------------------------
-# 人別フラグの事前計算と、章のファイル一式の cloud-init への埋め込み
+# 人別フラグの事前計算(全章分)と、配布物の S3 アップロード
 # ---------------------------------------------------------------
 
 # フラグ生成用シークレット(登録手順は ../ops/README.md)。変数で渡さないのは、
@@ -116,7 +117,7 @@ data "external" "flags" {
 
   query = {
     participant = each.key
-    chapter     = var.chapter
+    chapters    = jsonencode(local.chapters)
     secret      = data.aws_ssm_parameter.flag_secret.value
     questions   = jsonencode(local.questions)
   }
@@ -127,31 +128,70 @@ locals {
   # grader/lambda_function.py の HEX_LEN と揃っている)
   questions = ["q1", "q2"]
 
-  chapter_dir = "${path.module}/../../chapters/${var.chapter}"
+  chapters_dir = "${path.module}/../../chapters"
 
-  # 章のファイル + submit コマンドを /opt/src 以下に同じ構造で配置する。
-  # SOLUTION.md(運営用の解答)と e2e.sh(想定解を含む E2E テスト)は
-  # participant の VM に配布してはいけない
-  payload_files = merge(
+  # 配布対象の全章(setup.sh を持つディレクトリ)。VM には常に全章を配り、
+  # どの章を動かすかは VM 上の start-chapter で切り替える
+  chapters = sort([for f in fileset(local.chapters_dir, "*/setup.sh") : dirname(f)])
+
+  # S3 に置く配布物。SOLUTION.md(運営用の解答)と e2e.sh(想定解を含む
+  # E2E テスト)は participant の VM から見える場所に置いてはいけない
+  dist_files = merge(
     {
-      for f in fileset(local.chapter_dir, "**") :
-      "chapters/${var.chapter}/${f}" => "${local.chapter_dir}/${f}"
-      if f != "SOLUTION.md" && f != "e2e.sh" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
+      for f in fileset(local.chapters_dir, "**") :
+      "chapters/${f}" => "${local.chapters_dir}/${f}"
+      if basename(f) != "SOLUTION.md" && basename(f) != "e2e.sh" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
     },
     { "tools/submit" = "${path.module}/../../tools/submit" },
+    {
+      for f in fileset("${path.module}/../../tools/vm", "*") :
+      "tools/vm/${f}" => "${path.module}/../../tools/vm/${f}"
+    },
   )
+}
 
-  # 各ファイルは平文で cloud-config に埋め込み、user-data 全体を 1 回だけ
-  # gzip する(user_data_base64 参照)。ファイルごとの gzip+base64 は
-  # base64 で 1.33 倍に膨張して 16KB 制限をほぼ使い切るため。
-  # file() の制約でテキストファイル前提(バイナリを配りたくなったら S3 へ)
-  write_files = [
-    for rel, abs in local.payload_files : {
-      path        = "/opt/src/${rel}"
-      content     = file(abs)
-      permissions = "0644"
-    }
-  ]
+resource "aws_s3_bucket" "dist" {
+  bucket        = "linux-handson-dist-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "dist" {
+  bucket = aws_s3_bucket.dist.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_object" "dist" {
+  for_each = local.dist_files
+
+  bucket      = aws_s3_bucket.dist.id
+  key         = "dist/${each.key}"
+  source      = each.value
+  source_hash = filemd5(each.value)
+}
+
+resource "aws_iam_role_policy" "read_dist" {
+  name = "read-dist"
+  role = aws_iam_role.handson.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.dist.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.dist.arn}/*"
+      },
+    ]
+  })
 }
 
 resource "aws_instance" "handson" {
@@ -176,24 +216,48 @@ resource "aws_instance" "handson" {
     volume_size = 8
   }
 
-  # cloud-init: ファイルを書き込み、人別フラグを渡して章の setup.sh を実行。
-  # 16KB 制限対策として cloud-config 全体を gzip して渡す(cloud-init は
-  # gzip された user-data を透過的に展開する)。制限は gzip 後のサイズに
-  # 効くので、ch03 時点で 7KB 程度。それでも肥大したら S3 配布に切り替える
+  # cloud-init: 参加者情報と人別フラグ(全章分)を書き込み、bootstrap.sh が
+  # S3 から全章の配布物を取得して今日の章を start-chapter で有効化する。
+  # フラグを含むため user-data は IMDS 経由で参加者本人に読めるが、
+  # 漏れて困るのは本人のフラグだけ(自分の答えのカンニングは性善説で運用)
   user_data_base64 = base64gzip(join("\n", ["#cloud-config", yamlencode({
-    write_files = local.write_files
+    write_files = concat(
+      [
+        {
+          path        = "/etc/handson/participant"
+          content     = "${each.key}\n"
+          permissions = "0644"
+        },
+        {
+          path = "/etc/handson/flags.env"
+          content = join("\n", [
+            for k in sort(keys(data.external.flags[each.key].result)) :
+            "${k}=${data.external.flags[each.key].result[k]}"
+          ])
+          permissions = "0600"
+        },
+        {
+          path        = "/opt/handson-bootstrap.sh"
+          content     = file("${path.module}/../../tools/vm/bootstrap.sh")
+          permissions = "0755"
+        },
+      ],
+      var.grader_function_arn != "" ? [
+        {
+          path        = "/etc/handson/grader_arn"
+          content     = "${var.grader_function_arn}\n"
+          permissions = "0644"
+        },
+      ] : [],
+    )
     runcmd = [
       [
         "bash", "-c",
         format(
-          "PARTICIPANT='%s' %s GRADER_ARN='%s' bash /opt/src/chapters/%s/setup.sh >/var/log/handson-setup.log 2>&1",
-          each.key,
-          join(" ", [
-            for qid in local.questions :
-            "FLAG_${upper(qid)}='${data.external.flags[each.key].result[qid]}'"
-          ]),
-          var.grader_function_arn,
-          var.chapter,
+          "DIST_BUCKET='%s' TODAY_CHAPTER='%s' AWS_DEFAULT_REGION='%s' bash /opt/handson-bootstrap.sh >/var/log/handson-setup.log 2>&1",
+          aws_s3_bucket.dist.bucket,
+          var.today_chapter,
+          var.region,
         )
       ],
       # 自動 destroy が失敗したときの保険: 予定時刻の 30 分後に self-terminate
@@ -202,8 +266,11 @@ resource "aws_instance" "handson" {
   })]))
   user_data_replace_on_change = true
 
+  # ブート時の s3 sync が配布物のアップロード前に走らないようにする
+  depends_on = [aws_s3_object.dist]
+
   tags = {
-    Name        = "handson-${var.chapter}-${each.key}"
+    Name        = "handson-${each.key}"
     Participant = each.key
   }
 }

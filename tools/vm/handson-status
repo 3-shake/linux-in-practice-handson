@@ -1,0 +1,41 @@
+#!/bin/bash
+#
+# 章の状態と提出状況の一覧(/usr/local/bin/handson-status として配置される)。
+# 参加者向けで root 権限は不要。提出済みかどうかは、正解ハッシュ
+# (/etc/handson/answers/*.sha256)と submit の提出済みマーカー
+# (/var/tmp/.handson-submitted-<フラグの sha256 先頭16文字>)の突き合わせで分かる
+set -u
+
+STATE=/etc/handson/state
+ANSWERS=/etc/handson/answers
+
+# 章の提出状況を「(提出 n/m)」で返す(未インストールなら空)
+submitted() {
+    local ch=$1 n=0 total=0 f h
+    for f in "$ANSWERS/$ch"-*.sha256; do
+        [ -f "$f" ] || continue
+        total=$((total + 1))
+        h=$(cut -c1-16 <"$f")
+        [ -e "/var/tmp/.handson-submitted-$h" ] && n=$((n + 1))
+    done
+    [ "$total" -gt 0 ] && printf '(提出 %d/%d)' "$n" "$total"
+    return 0
+}
+
+active=$(cat "$STATE/active" 2>/dev/null || true)
+if [ -n "$active" ]; then
+    echo "アクティブ: $active$(submitted "$active") — 問題文: cat /opt/handson/$active/README.md"
+fi
+
+paused="" notyet=""
+for ch in $(cat "$STATE/available" 2>/dev/null); do
+    [ "$ch" = "$active" ] && continue
+    if [ -e "$STATE/$ch.installed" ]; then
+        paused="$paused $ch$(submitted "$ch")"
+    else
+        notyet="$notyet $ch"
+    fi
+done
+[ -n "$paused" ] && echo "一時停止中:$paused"
+[ -n "$notyet" ] && echo "未開始:$notyet"
+echo "章の開始・切り替え: start-chapter chNN(進捗は残ります)"

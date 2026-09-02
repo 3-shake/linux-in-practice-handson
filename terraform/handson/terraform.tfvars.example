@@ -1,8 +1,8 @@
 # cp terraform.tfvars.example terraform.tfvars して編集する
 # フラグ生成用シークレットは Parameter Store の /linux-handson/flag-secret から
 # 読む(初回登録の手順は ops/README.md)
-chapter      = "ch01"
-participants = ["alice", "bob"]
+today_chapter = "ch01" # 接続時に自動で始まる章。全章配布されるので参加者は start-chapter で切り替え可
+participants  = ["alice", "bob"]
 # destroy_at = "21:00" # 自動 destroy の時刻(JST)。既定は当日19時。日時指定は YYYY-MM-DDThh:mm:ss
 # instance_type = "t3.micro"
 # grader_function_arn = ""   # 採点 Lambda を立てたら関数の ARN を設定

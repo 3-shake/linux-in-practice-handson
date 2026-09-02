@@ -4,9 +4,10 @@
 #
 #   tools/e2e <chapter> [instance-id]
 #
-# instance-id を省略すると tag:Name=handson-<chapter>-* の running インスタンス
-# を検索し、1台だけならそれを使う。章ファイル一式 + tools/ を tar+gzip+base64
-# で VM に送り込み、chapters/<chapter>/e2e.sh を root で実行して結果を表示する。
+# instance-id を省略すると tag:Name=handson-* の running インスタンスを検索し、
+# 1台だけならそれを使う。章ファイル一式 + tools/ を tar+gzip+base64 で VM に
+# 送り込み、start-chapter で対象章を有効化してから chapters/<chapter>/e2e.sh を
+# root で実行して結果を表示する。
 # e2e.sh が exit 0 (E2E: ALL PASS) 以外なら、このスクリプトも exit 1 で終わる。
 #
 # 制約:
@@ -28,13 +29,13 @@ fi
 # 対象インスタンスの解決
 if [ -z "$INSTANCE" ]; then
     ids=$(aws ec2 describe-instances \
-        --filters "Name=tag:Name,Values=handson-${CHAPTER}-*" \
+        --filters "Name=tag:Name,Values=handson-*" \
         "Name=instance-state-name,Values=running" \
         --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]|[0].Value]' \
         --output text)
     n=$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')
     if [ "$n" -eq 0 ]; then
-        echo "running の handson-${CHAPTER}-* が見つかりません。instance-id を指定してください" >&2
+        echo "running の handson-* が見つかりません。instance-id を指定してください" >&2
         exit 1
     fi
     if [ "$n" -gt 1 ]; then
@@ -62,6 +63,11 @@ rm -rf /opt/e2e/src
 mkdir -p /opt/e2e/src
 echo "$B64" | base64 -d | tar -xz -C /opt/e2e/src
 export E2E_SRC=/opt/e2e/src
+# 遅延 setup の VM では対象章を有効化してから流す(未インストールなら
+# ここで setup が走る。旧方式の VM には start-chapter が無いのでスキップ)
+if command -v start-chapter >/dev/null 2>&1; then
+    start-chapter "$CHAPTER" || exit 1
+fi
 exec bash "\$E2E_SRC/chapters/$CHAPTER/e2e.sh"
 EOF
 

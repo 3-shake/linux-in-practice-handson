@@ -1,0 +1,144 @@
+#!/bin/bash
+#
+# 章の開始・切り替えコマンド(/usr/local/bin/start-chapter として配置される)
+#
+#   start-chapter ch05
+#
+# 初回はその章の setup.sh を実行し、2回目以降は一時停止からの再開になる。
+# 別の章がアクティブなら自動で一時停止する(作ったファイルや修復の成果は
+# 残り、動いている問題プロセスと全体に効く設定だけが元に戻る)。
+#
+# 章側の規約(chapters/chNN/、いずれも任意):
+#   units     — 章が常駐させる systemd ユニットの一覧(1行1ユニット)。
+#               一時停止時に稼働中のものを記録して stop し、再開時に start する
+#   pause.sh  — 一時停止フック(システム全体に効く knob の退避・復元用)
+#   resume.sh — 再開フック
+set -euo pipefail
+
+[ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+
+CH=${1:?usage: start-chapter chNN}
+[[ "$CH" =~ ^ch[0-9]{2}$ ]] || {
+    echo "章は ch01 のような形式で指定してください" >&2
+    exit 1
+}
+
+HANDSON=/etc/handson
+DIST=$HANDSON/dist
+STATE=$HANDSON/state
+CH_SRC=$DIST/chapters/$CH
+LOG=/var/log/handson-setup.log
+
+[ -d "$CH_SRC" ] || {
+    echo "$CH は配布されていません(存在する章: $(cat "$STATE/available" 2>/dev/null | tr '\n' ' '))" >&2
+    exit 1
+}
+mkdir -p "$STATE"
+chmod 755 "$STATE"
+
+# autocheck(修復タスクの自動判定)をアクティブな章に向ける。
+# 各章の setup.sh も同内容を書くが、再開時はここで向け直す必要がある
+point_autocheck() {
+    cat >/etc/systemd/system/handson-autocheck.service <<UNIT
+[Unit]
+Description=handson fix-task auto check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/$1-check --auto
+UNIT
+    cat >/etc/systemd/system/handson-autocheck.timer <<'UNIT'
+[Unit]
+Description=handson fix-task auto check timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now handson-autocheck.timer >/dev/null 2>&1
+    systemctl restart handson-autocheck.timer
+}
+
+pause_chapter() {
+    local pch=$1 u state
+    systemctl stop handson-autocheck.timer 2>/dev/null || true
+
+    # 稼働中のユニットだけを記録して止める(参加者が disable 等で止めた
+    # ユニットは記録されず、再開時にも起動しない = 修復の成果が残る)
+    : >"$STATE/$pch.units"
+    while read -r u; do
+        [ -n "$u" ] || continue
+        state=$(systemctl is-active "$u" 2>/dev/null || true)
+        case "$state" in
+        active | activating | reloading)
+            echo "$u" >>"$STATE/$pch.units"
+            systemctl stop "$u"
+            ;;
+        esac
+    done < <(cat "$DIST/chapters/$pch/units" 2>/dev/null || true)
+
+    # s3 sync は実行ビットを保存しないため -f で判定して bash 経由で実行する
+    if [ -f "$DIST/chapters/$pch/pause.sh" ]; then
+        bash "$DIST/chapters/$pch/pause.sh"
+    fi
+
+    # 停止中の章の check は誤判定するため案内スタブに差し替える
+    cat >"/usr/local/bin/$pch-check" <<STUB
+#!/bin/bash
+echo "$pch は一時停止中です。再開するには: start-chapter $pch"
+exit 3
+STUB
+    chmod 755 "/usr/local/bin/$pch-check"
+
+    rm -f "$STATE/active"
+    echo "$pch を一時停止しました(進捗は残っています。戻るには: start-chapter $pch)"
+}
+
+active=$(cat "$STATE/active" 2>/dev/null || true)
+if [ "$active" = "$CH" ]; then
+    echo "$CH は既にアクティブです"
+    exit 0
+fi
+if [ -n "$active" ]; then
+    pause_chapter "$active"
+fi
+
+if [ ! -e "$STATE/$CH.installed" ]; then
+    echo "$CH を準備しています(初回は1〜2分かかります)..."
+    FLAG_Q1=$(sed -n "s/^$CH-q1=//p" "$HANDSON/flags.env")
+    FLAG_Q2=$(sed -n "s/^$CH-q2=//p" "$HANDSON/flags.env")
+    [ -n "$FLAG_Q1" ] && [ -n "$FLAG_Q2" ] || {
+        echo "flags.env に $CH のフラグがありません" >&2
+        exit 1
+    }
+    if ! PARTICIPANT=$(cat "$HANDSON/participant") \
+        GRADER_ARN=$(cat "$HANDSON/grader_arn" 2>/dev/null || true) \
+        FLAG_Q1=$FLAG_Q1 FLAG_Q2=$FLAG_Q2 \
+        bash "$CH_SRC/setup.sh" >>"$LOG" 2>&1; then
+        echo "$CH の setup に失敗しました。$LOG の末尾:" >&2
+        tail -20 "$LOG" >&2 || true
+        exit 1
+    fi
+    touch "$STATE/$CH.installed"
+else
+    if [ -f "$CH_SRC/resume.sh" ]; then
+        bash "$CH_SRC/resume.sh"
+    fi
+    if [ -f "$STATE/$CH.units" ]; then
+        while read -r u; do
+            [ -n "$u" ] && systemctl start "$u" || true
+        done <"$STATE/$CH.units"
+    fi
+    # 一時停止時に差し替えたスタブを本物の check に戻す
+    install -m 755 "$CH_SRC/check.sh" "/usr/local/bin/$CH-check"
+fi
+
+point_autocheck "$CH"
+echo "$CH" >"$STATE/active"
+chmod 644 "$STATE/active"
+echo "$CH がアクティブになりました。問題文: cat /opt/handson/$CH/README.md"

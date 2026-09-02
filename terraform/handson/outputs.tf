@@ -12,7 +12,7 @@ output "connect_commands" {
 }
 
 output "flags" {
-  description = "運営用: 人別の正解フラグ一覧(terraform output flags で確認)"
+  description = "運営用: 人別の正解フラグ一覧(全章分、キーは chNN-qN。terraform output flags で確認)"
   value       = { for p, f in data.external.flags : p => f.result }
   sensitive   = true
 }

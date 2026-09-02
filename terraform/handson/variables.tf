@@ -4,10 +4,15 @@ variable "region" {
   default     = "ap-northeast-1"
 }
 
-variable "chapter" {
-  description = "払い出す章 (chapters/ 以下のディレクトリ名)"
+variable "today_chapter" {
+  description = "接続時に自動でアクティブになる「今日の章」。章のファイルは常に全章分を S3 経由で配布し、参加者は VM 上の start-chapter で切り替えられる"
   type        = string
   default     = "ch01"
+
+  validation {
+    condition     = can(regex("^ch\\d{2}$", var.today_chapter))
+    error_message = "today_chapter は chNN 形式(例: ch03)で指定する。"
+  }
 }
 
 variable "participants" {

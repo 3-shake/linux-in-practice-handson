@@ -111,6 +111,16 @@ resource "aws_iam_role_policy" "codebuild" {
         Resource = "${aws_s3_bucket.tfstate.arn}/*"
       },
       {
+        # handson スタックが作る章配布用バケット(destroy で中身ごと消す)
+        Sid    = "DistBucket"
+        Effect = "Allow"
+        Action = ["s3:Get*", "s3:List*", "s3:Delete*", "s3:PutBucketPublicAccessBlock"]
+        Resource = [
+          "arn:aws:s3:::linux-handson-dist-${data.aws_caller_identity.current.account_id}",
+          "arn:aws:s3:::linux-handson-dist-${data.aws_caller_identity.current.account_id}/*",
+        ]
+      },
+      {
         Sid      = "Ec2Read"
         Effect   = "Allow"
         Action   = "ec2:Describe*"
