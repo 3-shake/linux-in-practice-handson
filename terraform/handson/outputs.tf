@@ -1,14 +1,6 @@
 output "instances" {
-  description = "参加者 → インスタンス ID(Slack に貼る用)"
+  description = "参加者 → インスタンス ID(運営の確認用。接続は Name タグ解決のワンライナーで行う)"
   value       = { for p, i in aws_instance.handson : p => i.id }
-}
-
-output "connect_commands" {
-  description = "参加者ごとの接続コマンド"
-  value = {
-    for p, i in aws_instance.handson :
-    p => "aws ssm start-session --target ${i.id}"
-  }
 }
 
 output "flags" {

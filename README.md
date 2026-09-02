@@ -67,10 +67,11 @@ $ terraform apply
 > region = ap-northeast-1
 > ```
 
-apply 後、接続コマンド一覧を Slack に貼る:
+apply 後、接続用ワンライナーを Slack に貼る(参加者は `NAME=` を自分の名前に
+変えて実行する。全員共通なので毎回人別に出力する必要はない):
 
 ```console
-$ terraform output connect_commands
+$ NAME=自分の名前; aws ssm start-session --region ap-northeast-1 --target $(aws ec2 describe-instances --region ap-northeast-1 --filters Name=tag:Name,Values=handson-$NAME Name=instance-state-name,Values=running --query 'Reservations[0].Instances[0].InstanceId' --output text)
 ```
 
 参加者はマネジメントコンソール(EC2 → 接続 → セッションマネージャー)からも
