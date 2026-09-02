@@ -13,6 +13,7 @@ data "aws_caller_identity" "current" {}
 
 locals {
   bucket_name  = "linux-handson-tfstate-${data.aws_caller_identity.current.account_id}"
+  dist_bucket  = "linux-handson-dist-${data.aws_caller_identity.current.account_id}"
   project_name = "linux-handson-destroy"
 }
 
@@ -54,6 +55,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
       noncurrent_days = 30
     }
   }
+}
+
+# ---------------------------------------------------------------
+# 章配布用バケット。中身(オブジェクト)は handson スタックが管理する
+# ---------------------------------------------------------------
+resource "aws_s3_bucket" "dist" {
+  bucket = local.dist_bucket
+
+  # ops を畳むときに handson の残骸オブジェクトで詰まらないように
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "dist" {
+  bucket = aws_s3_bucket.dist.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 # ---------------------------------------------------------------
@@ -111,14 +131,17 @@ resource "aws_iam_role_policy" "codebuild" {
         Resource = "${aws_s3_bucket.tfstate.arn}/*"
       },
       {
-        # handson スタックが作る章配布用バケット(destroy で中身ごと消す)
-        Sid    = "DistBucket"
-        Effect = "Allow"
-        Action = ["s3:Get*", "s3:List*", "s3:Delete*", "s3:PutBucketPublicAccessBlock"]
-        Resource = [
-          "arn:aws:s3:::linux-handson-dist-${data.aws_caller_identity.current.account_id}",
-          "arn:aws:s3:::linux-handson-dist-${data.aws_caller_identity.current.account_id}/*",
-        ]
+        # 章配布バケットの中身の削除用(バケット自体は消さない)
+        Sid      = "DistBucketList"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+        Resource = aws_s3_bucket.dist.arn
+      },
+      {
+        Sid      = "DistBucketObjects"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:GetObjectTagging", "s3:DeleteObject"]
+        Resource = "${aws_s3_bucket.dist.arn}/*"
       },
       {
         Sid      = "Ec2Read"

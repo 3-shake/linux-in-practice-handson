@@ -134,6 +134,10 @@ locals {
   # どの章を動かすかは VM 上の start-chapter で切り替える
   chapters = sort([for f in fileset(local.chapters_dir, "*/setup.sh") : dirname(f)])
 
+  # 章配布用バケット(../ops 管理)。名前が決定的なので remote state は参照しない
+  dist_bucket     = "linux-handson-dist-${data.aws_caller_identity.current.account_id}"
+  dist_bucket_arn = "arn:aws:s3:::${local.dist_bucket}"
+
   # S3 に置く配布物。SOLUTION.md(運営用の解答)と e2e.sh(想定解を含む
   # E2E テスト)は participant の VM から見える場所に置いてはいけない
   dist_files = merge(
@@ -150,24 +154,10 @@ locals {
   )
 }
 
-resource "aws_s3_bucket" "dist" {
-  bucket        = "linux-handson-dist-${data.aws_caller_identity.current.account_id}"
-  force_destroy = true
-}
-
-resource "aws_s3_bucket_public_access_block" "dist" {
-  bucket = aws_s3_bucket.dist.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
 resource "aws_s3_object" "dist" {
   for_each = local.dist_files
 
-  bucket      = aws_s3_bucket.dist.id
+  bucket      = local.dist_bucket
   key         = "dist/${each.key}"
   source      = each.value
   source_hash = filemd5(each.value)
@@ -183,12 +173,12 @@ resource "aws_iam_role_policy" "read_dist" {
       {
         Effect   = "Allow"
         Action   = "s3:ListBucket"
-        Resource = aws_s3_bucket.dist.arn
+        Resource = local.dist_bucket_arn
       },
       {
         Effect   = "Allow"
         Action   = "s3:GetObject"
-        Resource = "${aws_s3_bucket.dist.arn}/*"
+        Resource = "${local.dist_bucket_arn}/*"
       },
     ]
   })
@@ -255,7 +245,7 @@ resource "aws_instance" "handson" {
         "bash", "-c",
         format(
           "DIST_BUCKET='%s' TODAY_CHAPTER='%s' AWS_DEFAULT_REGION='%s' bash /opt/handson-bootstrap.sh >/var/log/handson-setup.log 2>&1",
-          aws_s3_bucket.dist.bucket,
+          local.dist_bucket,
           var.today_chapter,
           var.region,
         )

@@ -1,8 +1,9 @@
-# 自動 destroy の常設インフラ
+# 常設インフラ（自動 destroy・章配布バケット）
 
 開催日の `destroy_at`（既定: 当日 19 時 JST）に参加者 VM を自動で片付ける
-ための常設リソース。毎回の払い出しは従来どおりローカルから
-`terraform/handson/` を apply する。state バケット名などの実値は
+ためのリソースと、章配布用の S3 バケット（`linux-handson-dist-<account>`。
+中身は handson 側が apply で同期し destroy で消す）。毎回の払い出しは
+従来どおりローカルから `terraform/handson/` を apply する。state バケット名などの実値は
 各ディレクトリの `backend.hcl`（アカウント ID を含むため gitignore 済み。
 `backend.hcl.example` からコピーして作る）。
 

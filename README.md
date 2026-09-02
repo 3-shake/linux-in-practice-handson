@@ -37,7 +37,7 @@ SSM Session Manager で VM に接続(SSH 鍵・公開ポートなし)
 | パス | 内容 |
 |---|---|
 | `terraform/handson/` | VM 払い出し一式(開催ごとに apply、指定時刻に自動 destroy) |
-| `terraform/ops/` | 自動 destroy の常設インフラ(state バケット・CodeBuild。初回セットアップ手順も `terraform/ops/README.md`) |
+| `terraform/ops/` | 常設インフラ(state バケット・章配布バケット・自動 destroy の CodeBuild。初回セットアップ手順も `terraform/ops/README.md`) |
 | `chapters/chNN/` | 各章(ch01〜ch12)の問題文(`README.md`)・仕込みスクリプト(`setup.sh`)・自動判定(`check.sh`)・解説(`SOLUTION.md`、実施後公開)。任意で常駐ユニット一覧(`units`)と一時停止・再開フック(`pause.sh` / `resume.sh`) |
 | `grader/` | 採点 Lambda(VM から Invoke API で直接呼ぶ、Slack / Google Chat の Webhook に通知) |
 | `tools/submit` | VM に配布されるフラグ提出コマンド |
