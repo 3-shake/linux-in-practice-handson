@@ -2,7 +2,7 @@
 #
 # 章の E2E テストを実 VM 上で実行する(SSM RunShellScript 経由)
 #
-#   tools/e2e <chapter> [instance-id]
+#   tools/e2e <chapter> [instance-id] [-q]
 #
 # instance-id を省略すると tag:Name=handson-* の running インスタンスを検索し、
 # 1台だけならそれを使う。章ファイル一式 + tools/ を tar+gzip+base64 で VM に
@@ -10,13 +10,28 @@
 # root で実行して結果を表示する。
 # e2e.sh が exit 0 (E2E: ALL PASS) 以外なら、このスクリプトも exit 1 で終わる。
 #
+# -q (quiet): アサーションの合否件数と総合結果だけを表示する。ケース名や
+# check の出力(=想定解のネタバレ)を出さないので、ブラインドプレイ前の
+# 健全性確認に使う。
+#
 # 制約:
 #   - ペイロードは send-command のサイズ制限(約100KB)以内に収めること
 #   - 出力は get-command-invocation の上限(約24000文字)で切り詰められる
 set -euo pipefail
 
-CHAPTER=${1:?usage: tools/e2e <chapter> [instance-id]}
-INSTANCE=${2:-}
+QUIET=0
+POS1=""
+POS2=""
+for a in "$@"; do
+    case "$a" in
+    -q | --quiet) QUIET=1 ;;
+    *)
+        if [ -z "$POS1" ]; then POS1=$a; else POS2=$a; fi
+        ;;
+    esac
+done
+CHAPTER=${POS1:?usage: tools/e2e <chapter> [instance-id] [-q]}
+INSTANCE=$POS2
 export AWS_PROFILE=${AWS_PROFILE:-handson-tf}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
@@ -92,10 +107,22 @@ done
 aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE" \
     --query '{Out:StandardOutputContent,Err:StandardErrorContent}' --output json |
     python3 -c 'import json,sys
+quiet = sys.argv[1] == "1"
 d = json.load(sys.stdin)
-print(d["Out"])
-if d["Err"]:
-    print("STDERR:\n" + d["Err"])'
+out, err = d["Out"], d["Err"]
+if quiet:
+    lines = [l.strip() for l in out.splitlines()]
+    p = sum(1 for l in lines if l.startswith("-> PASS"))
+    f = sum(1 for l in lines if l.startswith("-> FAIL"))
+    tail = [l for l in lines if l.startswith("E2E:")]
+    print(f"assertions: {p} PASS, {f} FAIL")
+    print(tail[-1] if tail else "E2E: (集計行なし)")
+    if err:
+        print(f"(stderr {len(err)} bytes — 詳細は -q なしで再実行)")
+else:
+    print(out)
+    if err:
+        print("STDERR:\n" + err)' "$QUIET"
 
 echo "status: $STATUS"
 [ "$STATUS" = "Success" ]

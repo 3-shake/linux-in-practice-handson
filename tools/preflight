@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# 章ハンズオンの機械チェック(ローカル完結・ネタバレなし)
+#
+#   tools/preflight ch04          # 1章
+#   tools/preflight ch04 ch05     # 複数章
+#   tools/preflight all           # chapters/ の全章
+#
+# 検査項目: 必須ファイルの存在、シェル/Python の構文、C の構文(ホストで
+# 通らないものは WARN)、S3 配布物への想定外ファイル混入、grader の
+# QUESTIONS エントリ。FAIL が1つでもあれば exit 1。
+set -u
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+MAIN_TF="$REPO/terraform/handson/main.tf"
+GRADER="$REPO/grader/lambda_function.py"
+FAIL=0
+
+ok() { echo "  ok:   $1"; }
+warn() { echo "  WARN: $1"; }
+ng() {
+    echo "  FAIL: $1"
+    FAIL=1
+}
+
+check_chapter() {
+    local ch=$1 dir="$REPO/chapters/$1" f
+    echo "== $ch =="
+    if [ ! -d "$dir" ]; then
+        ng "chapters/$ch がない"
+        return
+    fi
+
+    # 必須ファイル
+    for f in README.md setup.sh check.sh SOLUTION.md; do
+        if [ -f "$dir/$f" ]; then ok "$f あり"; else ng "$f がない"; fi
+    done
+    if [ -f "$dir/e2e.sh" ]; then ok "e2e.sh あり"; else warn "e2e.sh がない(実 VM E2E 未整備)"; fi
+
+    # シェル構文
+    while IFS= read -r f; do
+        if bash -n "$f" 2>/dev/null; then
+            ok "bash -n ${f#"$dir"/}"
+        else
+            ng "bash -n ${f#"$dir"/}"
+        fi
+    done < <(find "$dir" -name '*.sh' -type f)
+
+    # Python 構文
+    while IFS= read -r f; do
+        if python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" 2>/dev/null; then
+            ok "py_compile ${f#"$dir"/}"
+        else
+            ng "py_compile ${f#"$dir"/}"
+        fi
+    done < <(find "$dir" -name '*.py' -type f ! -path '*__pycache__*')
+
+    # C 構文(setup.sh が生成するヘッダや Linux 専用 API はホストで通らないので WARN 止まり)
+    while IFS= read -r f; do
+        if cc -fsyntax-only "$f" 2>/dev/null; then
+            ok "cc -fsyntax-only ${f#"$dir"/}"
+        else
+            warn "cc -fsyntax-only ${f#"$dir"/} は通らない(生成ヘッダ/Linux 専用なら VM 上のビルドで確認)"
+        fi
+    done < <(find "$dir" -name '*.c' -type f)
+
+    # 配布物に想定外のファイルが混ざっていないか(main.tf の dist_files は
+    # SOLUTION.md / e2e.sh / __pycache__ / *.pyc 以外を全部 S3 に置く)
+    while IFS= read -r f; do
+        case "$f" in
+        README.md | setup.sh | check.sh | units | pause.sh | resume.sh | SOLUTION.md | e2e.sh | PLAYTEST.md | src/*) : ;;
+        *) warn "$f は S3 経由で参加者 VM から見える(運営用なら main.tf の除外へ追加)" ;;
+        esac
+    done < <(cd "$dir" && find . -type f ! -path '*__pycache__*' ! -name '*.pyc' | sed 's|^\./||')
+
+    # grader に章のエントリがあるか
+    local q
+    for q in q1 q2; do
+        if grep -q "(\"$ch\", \"$q\")" "$GRADER"; then
+            ok "grader QUESTIONS に $ch-$q"
+        else
+            ng "grader QUESTIONS に $ch-$q がない"
+        fi
+    done
+}
+
+# 配布フィルタ(章共通の前提): 運営用ファイルの除外が生きているか
+echo "== 共通 =="
+for pat in 'basename(f) != "SOLUTION.md"' 'basename(f) != "e2e.sh"' 'basename(f) != "PLAYTEST.md"'; do
+    if grep -qF "$pat" "$MAIN_TF"; then
+        ok "main.tf の配布除外: $pat"
+    else
+        ng "main.tf の配布除外に $pat がない"
+    fi
+done
+
+chapters=("$@")
+if [ "${1:-}" = "all" ]; then
+    chapters=()
+    for d in "$REPO"/chapters/ch*/; do
+        chapters+=("$(basename "$d")")
+    done
+fi
+if [ "${#chapters[@]}" -eq 0 ]; then
+    echo "usage: tools/preflight <chNN>... | all" >&2
+    exit 1
+fi
+
+for ch in "${chapters[@]}"; do
+    check_chapter "$ch"
+done
+
+echo
+if [ "$FAIL" -eq 0 ]; then
+    echo "preflight: OK"
+else
+    echo "preflight: FAILED"
+fi
+exit "$FAIL"

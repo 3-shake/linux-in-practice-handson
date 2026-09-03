@@ -107,9 +107,15 @@ SSM 経由で実行する:
 ```console
 $ tools/e2e ch03            # tag:Name から VM を自動検出(running が1台のとき)
 $ tools/e2e ch03 i-xxxx     # インスタンス指定
+$ tools/e2e ch03 -q         # 合否件数だけ表示(ネタバレなし。ブラインドプレイ前の確認用)
 ```
 
 e2e.sh は想定解を含むため、SOLUTION.md と同様に参加者 VM へは配布されない。
+
+ローカルで完結する機械チェック(構文・必須ファイル・配布物の混入)は
+`tools/preflight <chNN>`(全章は `all`)。章の品質監査プロセス一式は
+Claude Code の `/audit-chapter chNN --pre|--full` に手順化してある
+(`--pre` はネタバレなしでプレイ前に、`--full` はプレイ後に全段監査)。
 
 ### 片付け(輪読会の後)
 
