@@ -138,13 +138,14 @@ locals {
   dist_bucket     = "linux-handson-dist-${data.aws_caller_identity.current.account_id}"
   dist_bucket_arn = "arn:aws:s3:::${local.dist_bucket}"
 
-  # S3 に置く配布物。SOLUTION.md(運営用の解答)と e2e.sh(想定解を含む
-  # E2E テスト)は participant の VM から見える場所に置いてはいけない
+  # S3 に置く配布物。SOLUTION.md(運営用の解答)・e2e.sh(想定解を含む
+  # E2E テスト)・PLAYTEST.md(運営用メモ)は participant の VM から見える
+  # 場所に置いてはいけない
   dist_files = merge(
     {
       for f in fileset(local.chapters_dir, "**") :
       "chapters/${f}" => "${local.chapters_dir}/${f}"
-      if basename(f) != "SOLUTION.md" && basename(f) != "e2e.sh" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
+      if basename(f) != "SOLUTION.md" && basename(f) != "e2e.sh" && basename(f) != "PLAYTEST.md" && !strcontains(f, "__pycache__/") && !endswith(f, ".pyc")
     },
     { "tools/submit" = "${path.module}/../../tools/submit" },
     {
