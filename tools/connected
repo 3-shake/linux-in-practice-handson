@@ -1,0 +1,20 @@
+#!/bin/bash
+#
+# 参加者 VM ごとに SSM セッションで接続中かを一覧する(接続確認の進み具合を見る)
+#
+#   tools/connected
+set -euo pipefail
+export AWS_PROFILE=${AWS_PROFILE:-handson-tf}
+REGION=${AWS_REGION:-ap-northeast-1}
+
+connected=$(aws ssm describe-sessions --region "$REGION" --state Active \
+    --query 'Sessions[].Target' --output text | tr '\t' '\n' | sort -u)
+
+aws ec2 describe-instances --region "$REGION" \
+    --filters "Name=tag:Name,Values=handson-*" "Name=instance-state-name,Values=running" \
+    --query 'Reservations[].Instances[].[InstanceId,Tags[?Key==`Name`]|[0].Value]' --output text |
+    sort -k2 |
+    while read -r id name; do
+        if grep -qx "$id" <<<"$connected"; then s="接続中"; else s="  -   "; fi
+        printf '%s  %s\n' "$s" "${name#handson-}"
+    done

@@ -2,6 +2,11 @@
 #
 # 第2章 問題2 の合否判定(/usr/local/bin/ch02-check として配置される)
 #
+# 合格条件は README の「恒久的に」の定義と同じ2点:
+#   1. いま動いていない — ユニットの状態だけでなく immortal.py のプロセス実在を
+#      実測する(ユニットファイルを消しても daemon-reload ではプロセスは死なない)
+#   2. OS 再起動後も復活しない — is-enabled が enabled でない。ユニットファイル
+#      ごと消した(LoadState=not-found)場合も起動しないので合格
 set -u
 
 # --auto: systemd timer からの定期実行モード。合格時だけ通知して自動停止する
@@ -13,21 +18,22 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# 参加者のシェル環境に依存せずに判定するため、クリーンな環境変数で問い合わせる。
-# 恒久修復(disable / mask)を要求する。kill / kill -9 だけの一時しのぎは
-# サービスが enabled のまま(Restart=always で復活)なので弾かれる。
+# 参加者のシェル環境に依存せずに判定するため、クリーンな環境変数で問い合わせる
 UNIT=handson-immortal.service
-enabled=$(env -i /usr/bin/systemctl is-enabled "$UNIT" 2>/dev/null || true)
-active=$(env -i /usr/bin/systemctl is-active "$UNIT" 2>/dev/null || true)
+sctl() { env -i /usr/bin/systemctl "$@" 2>/dev/null; }
+enabled=$(sctl is-enabled "$UNIT" || true)
+active=$(sctl is-active "$UNIT" || true)
+load=$(sctl show -p LoadState --value "$UNIT" || true)
 
-# 恒久停止か: enabled(自動起動する)状態でなく、かつ空でもない
 permanent=1
 case "$enabled" in
-enabled | enabled-runtime | "") permanent=0 ;;
+enabled | enabled-runtime) permanent=0 ;;
+"") [ "$load" = "not-found" ] || permanent=0 ;;
 esac
 
-# 今この瞬間に動いていないか
+pids=$(pgrep -f '^(/usr/bin/)?python3? /opt/handson/ch02/immortal\.py' | tr '\n' ' ' || true)
 stopped=1
+[ -z "$pids" ] || stopped=0
 case "$active" in
 active | activating | reloading) stopped=0 ;;
 esac
@@ -50,7 +56,15 @@ else
         exit 0
     fi
     echo "NG: handson-immortal はまだ恒久的に無効化されていません"
-    echo "  is-enabled=${enabled:-?} / is-active=${active:-?}"
-    echo "  (自動起動を止め[disable または mask]、かつ停止する必要があります)"
+    if [ "$stopped" -eq 1 ]; then
+        echo "  いま動いていない: OK"
+    else
+        echo "  いま動いていない: NG (is-active=${active:-?}${pids:+, PID $pids})"
+    fi
+    if [ "$permanent" -eq 1 ]; then
+        echo "  OS 再起動後も復活しない: OK"
+    else
+        echo "  OS 再起動後も復活しない: NG (is-enabled=${enabled:-?}: 起動時に立ち上がる設定のまま)"
+    fi
     exit 1
 fi

@@ -124,15 +124,24 @@ $ sudo ch02-check
 OK! ... flag{...}
 ```
 
-`mask --now`(disable より強く、起動そのものを禁止)や、`stop` と `disable` を別々に打つのも
-合格。修復できると systemd timer(30秒周期の `ch02-check --auto`)が検知し、wall 通知+
+`stop` と `disable` を別々に打つのも，ユニットファイルを消して `daemon-reload` してから
+`kill -9` するのも合格（LoadState=not-found のユニットは起動時に立ち上がらない）。
+`mask --now` は発想としては正しいが，このユニットは実体が `/etc/systemd/system/` にあるため
+`Failed to mask unit: File ... already exists` で mask 自体が失敗する（mask は同じパスに
+/dev/null への symlink を置く操作で，`/usr/lib/systemd/system/` 側のユニット向け。
+2026-09-16 の E2E で確認）。
+修復できると systemd timer(30秒周期の `ch02-check --auto`)が検知し、wall 通知+
 自動提出のうえ timer は自動停止する。
 
 ### 合否の原則と不合格パターン
 
 systemd には「今動いている個体」と「起動時に立ち上がる設定(enable = WantedBy の symlink)」
-の 2 層があり、check は両方が止まっていること(is-enabled が enabled でない、かつ is-active
-が active でない)を要求する。`Restart=` は前者の層の「勝手に死んだときの復旧」設定であって、
+の 2 層があり、check は両方が止まっていることを要求する。個体側は is-active に加えて
+immortal.py を実行中の python プロセスの実在を `pgrep` で実測する（ユニットファイルを消して
+`daemon-reload` しても個体は死なないため）。設定側は is-enabled が enabled でないこと，または
+ユニットが not-found であること。README にも同じ 2 点を「恒久的に」の定義として明記し，
+check の NG 出力はどちらの条件が未達かを表示する（2026-09-16 の回で「恒久的の定義が曖昧」と
+指摘されたため）。`Restart=` は前者の層の「勝手に死んだときの復旧」設定であって、
 後者とは無関係。
 
 | 操作 | is-enabled | is-active | 結果 |
@@ -141,7 +150,10 @@ systemd には「今動いている個体」と「起動時に立ち上がる設
 | `kill -9` を 10 秒に 5 回以上連打 | enabled | failed(起動レート制限で復活が止まる) | NG。再起動すれば復活 |
 | `systemctl stop` だけ | enabled | failed | NG。再起動すれば復活 |
 | `systemctl edit` で `Restart=no` にして `kill -9` | enabled | failed | NG。原因の確証には使えるが修復ではない |
-| `disable --now` / `mask --now` | disabled / masked | inactive, failed | OK |
+| `mask --now` | enabled(mask が失敗) | active | NG。/etc にユニット実体があると mask できない |
+| ユニットファイルを `rm` + `daemon-reload` だけ | (not-found) | active(個体は生存) | NG |
+| `rm` + `daemon-reload` + `kill -9` | (not-found) | inactive | OK |
+| `disable --now`(または stop → disable) | disabled | inactive, failed | OK |
 
 議論ポイント:
 
@@ -151,6 +163,16 @@ systemd には「今動いている個体」と「起動時に立ち上がる設
   systemd の知らないところでプロセスが終了したとき(外から kill、exit、クラッシュ、タイムアウト)。
   `systemctl stop` は systemd 自身が止める操作なので再起動の対象にならない(systemd.service(5))。
   「always」は「どんな理由の終了でも」であって「stop しても」ではない。
+- 「`Restart=always` を外すだけではダメ？」（2026-09-16 の回で出た質問）→ ダメ。`Restart=` は
+  「systemd の知らないところで死んだら作り直す」という個体層の設定で，enable（起動時に立ち上げる）
+  とは別の層。外して `kill -9` すれば個体は消えるが，enabled のままなので OS 再起動で復活する。
+  「恒久的」＝再起動に耐える，という定義を README に明記した。
+- 業務との接点：systemd ユニットは Kubernetes の Deployment，`kill -9` は `kubectl delete pod`。
+  Pod を消しても ReplicaSet が作り直すのと同じで，恒久的に止めるには個体ではなく作り直す側
+  （Deployment の replicas=0 やマニフェスト削除 ≒ disable）を触る。SIGTERM を無視するプロセスに
+  systemd が TimeoutStopSec 後に SIGKILL を送るのも，Pod 終了時の SIGTERM →
+  terminationGracePeriodSeconds 後の SIGKILL と同じ流れ。systemd を業務で触らない参加者には
+  この対応関係で説明すると通じる。
 - stop 時、SIGTERM を無視するプロセス相手だと systemd は TimeoutStopSec 経過後に SIGKILL する。
   ここでは `KillSignal=SIGKILL` にして `disable --now` が固まらないようにしている(その結果
   stop 後の状態が inactive ではなく failed になる)。
@@ -172,6 +194,19 @@ printf '%s' "<participant>:ch02-q2" | openssl dgst -sha256 -hmac "$FLAG_SECRET" 
 解説タイムに `src/oracled.c` と `setup.sh` を Slack で公開すると深掘り教材になる:
 `isatty` によるデーモン判定、systemd サービスとしての起動、XOR 難読化、
 `handson-immortal` の `SIG_IGN` と `Restart=always` の組み合わせが、そのまま章の実例になる。
+
+## 運営メモ: 2026-09-16 実施の反省
+
+- 「2章に切り替えて問題2」と口頭・画面共有で案内したが，参加者は `start-chapter ch02` の後も
+  ch01 のディレクトリに居残り，ch01 の問題2を解いた。対策として対話シェルの start-chapter を
+  「切り替え＋その章のディレクトリへ移動」にし（tools/vm/handson-profile.sh），切り替えコマンドと
+  リンクをチャットに貼る運用にした（ルート README「当日の進め方」）。
+- 「恒久的に」の定義が曖昧，`Restart=always` を外すだけでは？という指摘 → README・check・
+  本解説を上記のとおり修正。
+- シグナル（個体を倒す）と systemd（復活させる側）の題材が二本立てに見える，という運営側の
+  自省は残課題。Kubernetes の対応関係で一本の話につなぐ説明を加えたが，題材そのものの再設計
+  （例：無視されるシグナル → 無視できないシグナル → 管理主体，を 1 問で段階的に踏ませる）は
+  次回以降の検討事項。
 
 ## 既知の割り切り
 
