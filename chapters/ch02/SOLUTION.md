@@ -74,38 +74,46 @@ $ python3 -c "import re;d=open('/tmp/r.bin','rb').read();x=bytes(b^0x5A for b in
 
 ## 問題2: 倒せないプロセス
 
-狙い: シグナルの理解(2章「シグナル」+ コラム「絶対殺す SIGKILL」)。SIGTERM は
-シグナルハンドラで無視できるが SIGKILL は無視できないこと、そして「殺しても復活する」
-現象からプロセスの管理主体(systemd サービス)にたどり着くこと。
+狙い: シグナルの理解(2章「シグナル」+ コラム「絶対殺す SIGKILL」)。SIGTERM は無視できるが
+SIGKILL は無視できないこと、そして「殺しても復活する」現象から管理主体(systemd サービス)に
+たどり着くこと。
 
 現象:
 
 ```console
-$ kill <PID>          # 無反応(immortal.py が SIGTERM を SIG_IGN にしている)
-$ sudo kill -9 <PID>  # 消えるが、Restart=always で 1〜2 秒後に別 PID で復活
+$ pgrep -af immortal  # PID を控える
+$ kill <PID>          # 無反応
+$ sudo kill -9 <PID>; pgrep -af immortal   # 直後は消えている
+$ sleep 2; pgrep -af immortal              # 別の PID で戻っている
 ```
+
+復活間隔はユニットの `RestartSec=1` による(検知後 1 秒待って ExecStart をやり直すので、
+python3 の起動を含めて体感 1〜2 秒)。fork し直すので PID は必ず変わる。この「PID が変わる」
+が、生き残ったのではなく誰かが作り直している、と気づく最初の手がかり。
 
 原因調査:
 
 ```console
-$ cat /proc/<PID>/status | grep Sig
-SigIgn: 0000000001005002     # bit2(SIGINT)と bit15(SIGTERM)が無視設定
-# シグナル n は下から n ビット目。0x4002 が immortal.py の設定した INT+TERM。
-# 残りの 0x1001000(SIGPIPE=13, SIGXFSZ=25)は Python 処理系が起動時に無視するもの
-# systemd のサービスであることに気づく(kill -9 後も active のまま Main PID だけ変わる。
-# 直近ログにも "Scheduled restart job" が出る)
-$ systemctl status handson-immortal.service
-● handson-immortal.service - handson immortal (ch02 q2)
-     Loaded: loaded (/etc/systemd/system/handson-immortal.service; enabled; ...)
-     Active: active (running) ...
+# なぜ kill が効かないか
+$ grep Sig /proc/<PID>/status
+SigIgn: 0000000001005002     # シグナル n は下から n ビット目。bit2(INT)+bit15(TERM)=0x4002 が
+                             # immortal.py の設定。残りの 0x1001000(PIPE, XFSZ)は Python 処理系のもの
 
-# ユニットファイルを見て Restart=always が原因だと分かる
-# (systemctl show -p Restart handson-immortal.service でも可)
+# 誰が復活させているか。復活後も PPID=1 / TTY=? / SID=PID なので PID 1(systemd)の直下に
+# 生えていると推測できるが、二重 fork したデーモンも PPID=1 になるので決め手は cgroup。
+# systemd はサービスごとに cgroup を作るので、所属ユニット名がそのまま出る
+$ cat /proc/<PID>/cgroup
+0::/system.slice/handson-immortal.service
+$ systemctl status <PID>     # PID を渡してもユニットに解決してくれる(ps -o unit でも可)
+
+# 復活の理由はユニット定義の Restart=
 $ systemctl cat handson-immortal.service
 [Service]
 ExecStart=/usr/bin/python3 /opt/handson/ch02/immortal.py
 Restart=always
 ...
+$ journalctl -b -u handson-immortal.service | grep -i restart   # 裏取り
+systemd[1]: handson-immortal.service: Scheduled restart job, restart counter is at 1.
 ```
 
 想定解(恒久修復):
@@ -116,43 +124,38 @@ $ sudo ch02-check
 OK! ... flag{...}
 ```
 
-修復できると systemd timer(30秒周期の `ch02-check --auto`)が検知し、wall 通知+自動提出
-のうえ timer は自動停止する。
+`mask --now`(disable より強く、起動そのものを禁止)や、`stop` と `disable` を別々に打つのも
+合格。修復できると systemd timer(30秒周期の `ch02-check --auto`)が検知し、wall 通知+
+自動提出のうえ timer は自動停止する。
 
-### 別解(いずれも合格)
+### 合否の原則と不合格パターン
 
-```console
-# mask にすると起動そのものを禁止できる(disable より強い)
-$ sudo systemctl mask --now handson-immortal.service
+systemd には「今動いている個体」と「起動時に立ち上がる設定(enable = WantedBy の symlink)」
+の 2 層があり、check は両方が止まっていること(is-enabled が enabled でない、かつ is-active
+が active でない)を要求する。`Restart=` は前者の層の「勝手に死んだときの復旧」設定であって、
+後者とは無関係。
 
-# stop してから disable でも可(--now は stop+disable の一括)
-$ sudo systemctl stop handson-immortal.service && sudo systemctl disable handson-immortal.service
-```
-
-不合格になる「一時しのぎ」と、その理由:
-
-```console
-# kill / kill -9 だけ: サービスは enabled のまま Restart=always で復活 → is-active=active に戻る
-$ sudo kill -9 <PID>
-# systemctl stop だけ: is-active=failed(KillSignal=SIGKILL で非クリーン終了扱い)に
-#   なるが is-enabled=enabled のまま
-#   → 再起動で復活する「恒久でない」修復なので check は弾く(is-enabled を見ている)
-$ sudo systemctl stop handson-immortal.service
-```
-
-判定は「enabled でない(disabled/masked)」かつ「active でない」の両方を要求している。
-`kill` 系だけでは前者を満たせず、`stop` だけでは後者しか満たせないので、いずれも不合格。
+| 操作 | is-enabled | is-active | 結果 |
+|---|---|---|---|
+| `kill -9` だけ | enabled | active(復活) | NG |
+| `kill -9` を 10 秒に 5 回以上連打 | enabled | failed(起動レート制限で復活が止まる) | NG。再起動すれば復活 |
+| `systemctl stop` だけ | enabled | failed | NG。再起動すれば復活 |
+| `systemctl edit` で `Restart=no` にして `kill -9` | enabled | failed | NG。原因の確証には使えるが修復ではない |
+| `disable --now` / `mask --now` | disabled / masked | inactive, failed | OK |
 
 議論ポイント:
 
-- SIGTERM(`kill` のデフォルト)は捕捉・無視できるが、SIGKILL と SIGSTOP は捕捉も無視も
-  できない(2章コラム)。だから `kill -9` は効く。
-- では `kill -9` で効くのになぜ復活するのか → プロセスには「管理主体」がいる。systemd の
-  `Restart=always`。プロセス単体を殺すのではなく、管理主体ごと止める(disable/mask)。
-- systemd がサービスを止めるときも、SIGTERM を無視するプロセス相手だと TimeoutStopSec 経過後
-  SIGKILL する。ここでは `KillSignal=SIGKILL` にして `disable --now` が固まらないようにしている。
-- 発展: 本物の「絶対死なないプロセス」= uninterruptible sleep(STAT=D)。ディスク I/O 待ちなどで
-  SIGKILL すら届かない。これは今回の immortal とは別物(immortal は殺せるが復活するだけ)。
+- SIGTERM は捕捉・無視できるが SIGKILL と SIGSTOP はできない(2章コラム)。だから `kill -9` は
+  効く。それでも復活するのは、プロセスに管理主体がいるから。倒すべきは個体ではなく管理主体。
+- `Restart=always` なのに `systemctl stop` で止まるのはなぜか → Restart= が発動するのは
+  systemd の知らないところでプロセスが終了したとき(外から kill、exit、クラッシュ、タイムアウト)。
+  `systemctl stop` は systemd 自身が止める操作なので再起動の対象にならない(systemd.service(5))。
+  「always」は「どんな理由の終了でも」であって「stop しても」ではない。
+- stop 時、SIGTERM を無視するプロセス相手だと systemd は TimeoutStopSec 経過後に SIGKILL する。
+  ここでは `KillSignal=SIGKILL` にして `disable --now` が固まらないようにしている(その結果
+  stop 後の状態が inactive ではなく failed になる)。
+- 発展: 本物の「絶対死なないプロセス」= uninterruptible sleep(STAT=D)。SIGKILL すら届かない。
+  immortal は殺せるが復活するだけなので別物。
 
 ## フラグ検証(運営)
 
